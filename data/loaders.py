@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterator, Optional
+import re
 
 from datasets import load_dataset
 
@@ -12,18 +13,65 @@ class Example:
     answer: Optional[str] = None
 
 
+def _gsm8k_extract_final(answer_text: Optional[str]) -> Optional[str]:
+    if not answer_text:
+        return None
+    m = re.search(r"####\s*(-?\d+)", answer_text)
+    if m:
+        return m.group(1)
+    return answer_text.strip().splitlines()[-1].strip()
+
+
 def load_gsm8k(split: str = "test", limit: Optional[int] = 25) -> Iterator[Example]:
-    ds = load_dataset("gsm8k", "main", split=split)
+    ds = load_dataset("gsm8k", "main", split=split, cache_dir="data/gsm8k")
 
     n = 0
     for row in ds:
         q = row["question"].strip()
-        a = row.get("answer").split("####")[-1].strip()
+        gold = _gsm8k_extract_final(row.get("answer"))
 
         yield Example(
             id=str(n),
-            prompt=f"Solve the math problem. Return ONLY the final number. No words, no units, no explanation.\n\n{q}\n\nAnswer:",
-            answer=a,
+            prompt=(
+                "Solve this math word problem. "
+                "Give ONLY the final numeric answer.\n\n"
+                f"{q}\n\nAnswer:"
+            ),
+            answer=gold,
+        )
+
+        n += 1
+        if limit is not None and n >= limit:
+            break
+
+
+def load_truthfulqa(limit: Optional[int] = 25) -> Iterator[Example]:
+    ds = load_dataset(
+        "truthful_qa",
+        "multiple_choice",
+        split="validation",
+        cache_dir="data/truthfulqa",
+    )
+
+    n = 0
+    for row in ds:
+        question = row["question"].strip()
+        choices = row["mc1_targets"]["choices"]
+        labels = row["mc1_targets"]["labels"]
+        gold = chr(65 + labels.index(1))
+
+        choice_block = "\n".join(
+            f"{chr(65+i)}. {choice.strip()}" for i, choice in enumerate(choices)
+        )
+
+        yield Example(
+            id=str(n),
+            prompt=(
+                "Answer the multiple choice question. "
+                "Return ONLY the letter of the best answer.\n\n"
+                f"{question}\n\n{choice_block}\n\nAnswer:"
+            ),
+            answer=gold,
         )
 
         n += 1

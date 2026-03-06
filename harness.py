@@ -32,8 +32,6 @@ def build_model(model_cfg: dict):
                 max_new_tokens=model_cfg.get("max_new_tokens", 128),
                 temperature=model_cfg.get("temperature", 0.0),
                 top_p=model_cfg.get("top_p", 1.0),
-                offload_folder=model_cfg.get("offload_folder"),
-                load_in_4bit=model_cfg.get("load_in_4bit", False),
             )
         )
 
@@ -126,13 +124,25 @@ def main():
 
         provider = model_cfg.get("provider")
         if provider == "openai":
-            raw = model.generate(ex.prompt, max_output_tokens=64)
+            raw = model.generate(
+                ex.prompt,
+                max_output_tokens=model_cfg.get("max_output_tokens", 128),
+            )
         elif provider == "anthropic":
-            raw = model.generate(ex.prompt, max_tokens=256)
+            raw = model.generate(
+                ex.prompt,
+                max_tokens=model_cfg.get("max_tokens", 128),
+            )
         elif provider == "fireworks":
-            raw = model.generate(ex.prompt, max_tokens=256)
+            raw = model.generate(
+                ex.prompt,
+                max_tokens=model_cfg.get("max_tokens", model_cfg.get("max_output_tokens", 256)),
+            )
         else:
-            raw = model.generate(ex.prompt, max_new_tokens=64)
+            raw = model.generate(
+                ex.prompt,
+                max_new_tokens=model_cfg.get("max_new_tokens", 128),
+            )
 
         latency = time.time() - t0
         out, usage = unwrap_generation_result(raw)
