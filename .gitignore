@@ -1,0 +1,27 @@
+# secrets
+.env
+configs/models.yaml
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# outputs
+runs/
+logs/
+
+# big model artifacts
+models/weights/
+models/cache/
+*.bin
+*.safetensors
+*.gguf
+*.pt
+*.pth
+*.onnx
+
+# OS junk
+.DS_Store
+Thumbs.db
