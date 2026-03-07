@@ -77,3 +77,64 @@ def load_truthfulqa(limit: Optional[int] = 25) -> Iterator[Example]:
         n += 1
         if limit is not None and n >= limit:
             break
+
+def load_humaneval(limit: Optional[int] = 25) -> Iterator[Example]:
+    ds = load_dataset(
+        "openai_humaneval",
+        split="test",
+        cache_dir="data/humaneval",
+    )
+
+    n = 0
+    for row in ds:
+        prompt = row["prompt"]
+
+        yield Example(
+            id=str(n),
+            prompt=(
+                "Complete the following Python function. "
+                "Return ONLY valid Python code. "
+                "Do not include explanations, markdown, or code fences.\n\n"
+                f"{prompt}"
+            ),
+            answer=row["entry_point"] + "|||SEP|||" + row["canonical_solution"],
+        )
+
+        n += 1
+        if limit is not None and n >= limit:
+            break
+
+def load_arc(limit: Optional[int] = 25) -> Iterator[Example]:
+    ds = load_dataset(
+        "ai2_arc",
+        "ARC-Challenge",
+        split="test",
+        cache_dir="data/arc_challenge",
+    )
+
+    n = 0
+    for row in ds:
+        question = row["question"]
+        choices = row["choices"]["text"]
+        labels = row["choices"]["label"]
+
+        options = "\n".join(
+            f"{label}. {text}" for label, text in zip(labels, choices)
+        )
+
+        yield Example(
+            id=str(n),
+            prompt=(
+                "Answer the multiple choice question. "
+                "Return ONLY the letter of the best answer.\n\n"
+                f"{question}\n\n"
+                f"{options}\n\n"
+                "Answer:"
+            ),
+            answer=row["answerKey"],
+        )
+
+        n += 1
+        if limit is not None and n >= limit:
+            break
+

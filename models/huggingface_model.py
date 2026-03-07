@@ -59,7 +59,7 @@ class HuggingFaceModel(BaseModel):
         if hasattr(self.model, "device") and self.model.device is not None:
             inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
 
-        gen = self.model.generate(
+        gen = self.model.generate(use_cache=True, 
             **inputs,
             max_new_tokens=max_new_tokens,
             do_sample=(temperature > 0),

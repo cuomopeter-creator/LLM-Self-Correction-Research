@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv(".env", override=True)
 
 from logger import JSONLLogger, RunMeta, make_run_id
-from data.loaders import load_gsm8k
+from data.loaders import load_gsm8k, load_truthfulqa, load_humaneval, load_arc
 
 from models.huggingface_model import HuggingFaceModel, HFModelConfig
 from models.openai_model import OpenAIModel, OpenAIModelConfig
@@ -69,17 +69,23 @@ def build_model(model_cfg: dict):
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Run GSM8K evaluation harness.")
+    p = argparse.ArgumentParser(description="Run evaluation harness.")
     p.add_argument(
         "--model",
         default="llama3_1_8b_instruct",
         help="Model key from configs/models.yaml under `models:`",
     )
     p.add_argument(
+        "--task",
+        default="gsm8k",
+        choices=["gsm8k", "truthfulqa", "humaneval", "arc"],
+        help="Task to run.",
+    )
+    p.add_argument(
         "--limit",
         type=int,
         default=25,
-        help="Number of GSM8K examples to run.",
+        help="Number of examples to run.",
     )
     return p.parse_args()
 
@@ -94,6 +100,18 @@ def unwrap_generation_result(result: Any) -> Tuple[str, dict]:
         return text, usage
 
     return str(result).strip(), {}
+
+
+def load_examples(task: str, limit: int):
+    if task == "gsm8k":
+        return load_gsm8k(split="test", limit=limit)
+    if task == "truthfulqa":
+        return load_truthfulqa(limit=limit)
+    if task == "humaneval":
+        return load_humaneval(limit=limit)
+    if task == "arc":
+        return load_arc(limit=limit)
+    raise ValueError(f"Unknown task: {task}")
 
 
 def main():
@@ -115,11 +133,11 @@ def main():
             model_name=model_key,
             model_cfg=model_cfg,
             strategy_name="single_pass",
-            task_name="gsm8k_test",
+            task_name=args.task,
         ),
     )
 
-    for ex in load_gsm8k(split="test", limit=args.limit):
+    for ex in load_examples(args.task, args.limit):
         t0 = time.time()
 
         provider = model_cfg.get("provider")
