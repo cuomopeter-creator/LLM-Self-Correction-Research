@@ -9,6 +9,9 @@ load_dotenv(".env", override=True)
 
 from logger import JSONLLogger, RunMeta, make_run_id
 from data.loaders import load_gsm8k, load_truthfulqa, load_humaneval, load_arc
+from evaluators.code_evaluator import evaluate_humaneval
+from evaluators.math_evaluator import evaluate_math
+from evaluators.qa_evaluator import evaluate_qa
 
 from models.huggingface_model import HuggingFaceModel, HFModelConfig
 from models.openai_model import OpenAIModel, OpenAIModelConfig
@@ -70,23 +73,27 @@ def build_model(model_cfg: dict):
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Run evaluation harness.")
+
     p.add_argument(
         "--model",
-        default="llama3_1_8b_instruct",
+        default="llama",
         help="Model key from configs/models.yaml under `models:`",
     )
+
     p.add_argument(
         "--task",
         default="gsm8k",
         choices=["gsm8k", "truthfulqa", "humaneval", "arc"],
         help="Task to run.",
     )
+
     p.add_argument(
         "--limit",
         type=int,
         default=25,
         help="Number of examples to run.",
     )
+
     return p.parse_args()
 
 
@@ -114,6 +121,29 @@ def load_examples(task: str, limit: int):
     raise ValueError(f"Unknown task: {task}")
 
 
+def generate_with_model(model, model_cfg: dict, prompt: str):
+    provider = model_cfg.get("provider")
+    if provider == "openai":
+        return model.generate(
+            prompt,
+            max_output_tokens=model_cfg.get("max_output_tokens", 128),
+        )
+    if provider == "anthropic":
+        return model.generate(
+            prompt,
+            max_tokens=model_cfg.get("max_tokens", 128),
+        )
+    if provider == "fireworks":
+        return model.generate(
+            prompt,
+            max_tokens=model_cfg.get("max_tokens", model_cfg.get("max_output_tokens", 256)),
+        )
+    return model.generate(
+        prompt,
+        max_new_tokens=model_cfg.get("max_new_tokens", 128),
+    )
+
+
 def main():
     args = parse_args()
 
@@ -139,36 +169,59 @@ def main():
 
     for ex in load_examples(args.task, args.limit):
         t0 = time.time()
-
-        provider = model_cfg.get("provider")
-        if provider == "openai":
-            raw = model.generate(
-                ex.prompt,
-                max_output_tokens=model_cfg.get("max_output_tokens", 128),
-            )
-        elif provider == "anthropic":
-            raw = model.generate(
-                ex.prompt,
-                max_tokens=model_cfg.get("max_tokens", 128),
-            )
-        elif provider == "fireworks":
-            raw = model.generate(
-                ex.prompt,
-                max_tokens=model_cfg.get("max_tokens", model_cfg.get("max_output_tokens", 256)),
-            )
-        else:
-            raw = model.generate(
-                ex.prompt,
-                max_new_tokens=model_cfg.get("max_new_tokens", 128),
-            )
-
+        raw = generate_with_model(model, model_cfg, ex.prompt)
         latency = time.time() - t0
+
         out, usage = unwrap_generation_result(raw)
+        score = None
+        eval_stdout = ""
+        eval_stderr = ""
+        pred = ""
+        gold_norm = ""
+
+        if args.task == "humaneval":
+            try:
+                res = evaluate_humaneval(
+                    prompt=ex.prompt,
+                    completion=out,
+                    test_code=ex.test,
+                    entry_point=ex.entry_point,
+                )
+                score = res.passed
+                eval_stdout = res.stdout
+                eval_stderr = res.stderr
+            except Exception as e:
+                score = False
+                eval_stderr = str(e)
+
+        elif args.task == "gsm8k":
+            try:
+                res = evaluate_math(out, ex.answer)
+                score = res.correct
+                pred = res.pred
+                gold_norm = res.gold
+            except Exception as e:
+                score = False
+                eval_stderr = str(e)
+
+        elif args.task in ("arc", "truthfulqa"):
+            try:
+                res = evaluate_qa(out, ex.answer)
+                score = res.correct
+                pred = res.pred
+                gold_norm = res.gold
+            except Exception as e:
+                score = False
+                eval_stderr = str(e)
 
         print(f"ID: {ex.id}")
         print(f"OUTPUT: {out}")
         if usage:
             print(f"USAGE: {usage}")
+        if args.task in ("gsm8k", "arc", "truthfulqa"):
+            print(f"PRED: {pred}")
+            print(f"GOLD: {gold_norm}")
+            print(f"CORRECT: {score}")
         print("-" * 60)
 
         logger.log(
@@ -176,9 +229,15 @@ def main():
             prompt=ex.prompt,
             output=out,
             latency_s=latency,
+            score=score,
             extra={
                 "gold": ex.answer,
+                "gold_norm": gold_norm,
+                "pred": pred,
                 "usage": usage,
+                "entry_point": getattr(ex, "entry_point", None),
+                "eval_stdout": eval_stdout,
+                "eval_stderr": eval_stderr,
             },
         )
 

@@ -96,15 +96,16 @@ def load_humaneval(limit: Optional[int] = 25) -> Iterator[Example]:
         yield Example(
             id=row["task_id"],
             prompt=(
-                "Complete the following Python function. "
-                "Return ONLY the function body. "
-                "Do NOT include the function signature. "
-                "Do NOT include markdown, explanations, or code fences.\n\n"
-                "Please follow these formatting rules:\n"
-                    "1. Start the first line at column 0.\n"
-                    "2. Do NOT indent the entire answer.\n"
-                    "3. Use 4 spaces only for nested blocks like if/for/while.\n"
-                    "4. Return only the body statements.\n\n"
+                "Complete the following Python function.\n"
+                "Return ONLY the function body as executable Python code.\n"
+                "Do NOT include the function signature.\n"
+                "Do NOT include markdown, explanations, comments, code fences, or triple-quoted text.\n"
+                "Do NOT wrap the answer in ``` fences, ''' quotes, or \"\"\" quotes.\n"
+                "Formatting rules:\n"
+                "- Start the first line at column 0.\n"
+                "- Do NOT indent the entire answer.\n"
+                "- Use 4 spaces only for lines inside nested blocks like if/for/while/try.\n"
+                "- Return only the body statements.\n\n"
                 f"{prompt}"
             ),
             test=row["test"],
