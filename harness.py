@@ -10,13 +10,17 @@ load_dotenv(".env", override=True)
 from logger import JSONLLogger, RunMeta, make_run_id
 from data.loaders import load_gsm8k, load_truthfulqa, load_humaneval, load_arc
 from evaluators.code_evaluator import evaluate_humaneval
-from evaluators.math_evaluator import evaluate_math
+from evaluators.math_evaluator import evaluate_math, oracle_math_correct
 from evaluators.qa_evaluator import evaluate_qa
 
 from models.huggingface_model import HuggingFaceModel, HFModelConfig
 from models.openai_model import OpenAIModel, OpenAIModelConfig
 from models.anthropic_model import AnthropicModel, AnthropicModelConfig
 from models.fireworks_model import FireworksModel, FireworksModelConfig
+from strategies.single_pass import run_single_pass
+from strategies.best_of_n import run_best_of_n
+from strategies.self_refine import run_self_refine
+from strategies.oracle_feedback import run_oracle_feedback
 
 
 def load_yaml(path: str) -> dict:
@@ -88,9 +92,16 @@ def parse_args() -> argparse.Namespace:
     )
 
     p.add_argument(
+        "--strategy",
+        default="single_pass",
+        choices=["single_pass", "best_of_n", "self_refine", "oracle"],
+        help="Strategy to use.",
+    )
+
+    p.add_argument(
         "--limit",
         type=int,
-        default=25,
+        default=200,
         help="Number of examples to run.",
     )
 
@@ -107,6 +118,23 @@ def unwrap_generation_result(result: Any) -> Tuple[str, dict]:
         return text, usage
 
     return str(result).strip(), {}
+
+
+def sum_usage(outputs: list[Any]) -> dict:
+    total = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+    }
+
+    for item in outputs:
+        if isinstance(item, dict):
+            usage = item.get("usage", {}) or {}
+            total["input_tokens"] += int(usage.get("input_tokens", 0) or 0)
+            total["output_tokens"] += int(usage.get("output_tokens", 0) or 0)
+            total["total_tokens"] += int(usage.get("total_tokens", 0) or 0)
+
+    return total
 
 
 def load_examples(task: str, limit: int):
@@ -162,17 +190,74 @@ def main():
             created_at_utc=time.time(),
             model_name=model_key,
             model_cfg=model_cfg,
-            strategy_name="single_pass",
+            strategy_name=args.strategy,
             task_name=args.task,
         ),
     )
 
     for ex in load_examples(args.task, args.limit):
         t0 = time.time()
-        raw = generate_with_model(model, model_cfg, ex.prompt)
+        if args.strategy == "single_pass":
+            result = run_single_pass(
+                model=model,
+                prompt=ex.prompt,
+                model_cfg=model_cfg,
+            )
+        elif args.strategy == "best_of_n":
+            result = run_best_of_n(
+                model=model,
+                prompt=ex.prompt,
+                model_cfg=model_cfg,
+                n=3,
+            )
+        elif args.strategy == "self_refine":
+            result = run_self_refine(
+                model=model,
+                prompt=ex.prompt,
+                model_cfg=model_cfg,
+            )
+        elif args.strategy == "oracle":
+            if args.task == "gsm8k":
+                evaluator = lambda output, gold=ex.answer: oracle_math_correct(output, gold)
+            elif args.task == "arc":
+                evaluator = lambda output, gold=ex.answer: evaluate_qa(output, gold).correct
+            elif args.task == "truthfulqa":
+                evaluator = lambda output, gold=ex.answer: evaluate_qa(output, gold).correct
+            else:
+                raise ValueError(f"Oracle strategy not yet supported for task: {args.task}")
+
+            oracle_res = run_oracle_feedback(
+                model=model,
+                prompt=ex.prompt,
+                evaluator=evaluator,
+                max_output_tokens=model_cfg.get("max_output_tokens", 128),
+                max_new_tokens=model_cfg.get("max_new_tokens", 128),
+            )
+
+            result = {
+                "final_output": oracle_res.final_output,
+                "all_outputs": [
+                    oracle_res.initial_raw,
+                    oracle_res.final_raw,
+                ],
+                "intermediate_steps": [
+                    {
+                        "initial_output": oracle_res.initial_output,
+                        "feedback": oracle_res.feedback,
+                        "rounds_used": oracle_res.rounds_used,
+                    }
+                ],
+                "strategy_meta": {
+                    "corrected": oracle_res.corrected,
+                    "rounds_used": oracle_res.rounds_used,
+                },
+            }
+        else:
+            raise ValueError(f"Unknown strategy: {args.strategy}")
         latency = time.time() - t0
 
-        out, usage = unwrap_generation_result(raw)
+        out, usage = unwrap_generation_result(result["final_output"])
+        usage_total = sum_usage(result.get("all_outputs", []))
         score = None
         eval_stdout = ""
         eval_stderr = ""
@@ -235,9 +320,13 @@ def main():
                 "gold_norm": gold_norm,
                 "pred": pred,
                 "usage": usage,
+                "usage_total": usage_total,
                 "entry_point": getattr(ex, "entry_point", None),
                 "eval_stdout": eval_stdout,
                 "eval_stderr": eval_stderr,
+                "all_outputs": result.get("all_outputs", []),
+                "intermediate_steps": result.get("intermediate_steps", []),
+                "strategy_meta": result.get("strategy_meta", {}),
             },
         )
 
@@ -246,3 +335,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+

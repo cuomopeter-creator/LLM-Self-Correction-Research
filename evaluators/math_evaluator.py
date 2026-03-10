@@ -53,3 +53,9 @@ def evaluate_math(output: str, gold: str) -> MathEvalResult:
         pred=pred,
         gold=gold_norm,
     )
+
+def oracle_math_correct(output: str, gold: str) -> bool:
+    """Return True if model output matches gold answer."""
+    result = evaluate_math(output, gold)
+    return result.correct
+
