@@ -194,7 +194,7 @@ def main():
             task_name=args.task,
         ),
     )
-
+    #loading examples happens inside the loop to ensure we capture any loading errors in the logs, and to allow for partial results if loading fails partway through
     for ex in load_examples(args.task, args.limit):
         t0 = time.time()
         if args.strategy == "single_pass":
@@ -254,9 +254,11 @@ def main():
             }
         else:
             raise ValueError(f"Unknown strategy: {args.strategy}")
+        #latency is measured here to capture total time taken including evaluation and any additional steps in the strategy, not just generation time, since we want to capture total cost of the strategy
         latency = time.time() - t0
-
+        #unwrap generation result to get final output text and usage info (if available)
         out, usage = unwrap_generation_result(result["final_output"])
+        #sum usage across all outputs for the example, not just the final output, to capture total cost of the strategy
         usage_total = sum_usage(result.get("all_outputs", []))
         score = None
         eval_stdout = ""
@@ -309,6 +311,7 @@ def main():
             print(f"CORRECT: {score}")
         print("-" * 60)
 
+        #logging happens here to ensure we capture eval results and usage even if evaluation fails
         logger.log(
             example_id=ex.id,
             prompt=ex.prompt,
