@@ -1,77 +1,138 @@
-# LLM Self-Correction Evaluation
+LLM Self-Correction Evaluation
 
-This project implements an evaluation harness for studying **self-correction strategies in large language models (LLMs)**.
-The goal is to measure when iterative refinement improves results and when it simply increases compute cost.
+Before running:
+
+pip install -r requirements.txt
+
+This project implements an evaluation harness for studying self-correction strategies in large language models (LLMs).
+The goal is to measure when iterative refinement improves model performance and when it only increases computational cost.
 
 The system runs controlled experiments across multiple model families using standardized prompts, datasets, and evaluation metrics.
 
-## Models Used
+Models Evaluated
 
-The evaluation pipeline currently supports:
+The evaluation pipeline supports both local open-weight models and API-based frontier models:
 
-* **Qwen 2.5 7B Instruct** (local HuggingFace)
-* **Llama 3 8B Instruct** (local HuggingFace)
-* **Kimi K2 Instruct** (MoE model via Fireworks API)
-* **GPT-5.3 Chat** (OpenAI API)
-* **Claude Sonnet** (Anthropic API)
+Local Models
+
+Qwen 2.5 7B Instruct (HuggingFace)
+
+Llama 3 8B Instruct (HuggingFace)
+
+API Models
+
+Kimi K2 Instruct (Fireworks API)
+
+GPT-5.3 Chat (OpenAI API)
+
+Claude Sonnet (Anthropic API)
 
 These represent a mix of:
 
-* open-weight models
-* mixture-of-experts architectures
-* frontier proprietary models
+open-weight transformer models
 
-## Datasets
+mixture-of-experts architectures
 
-Experiments will be conducted across multiple benchmarks to test reasoning and factual reliability:
+frontier proprietary models
 
-* **GSM8K** – grade school math reasoning problems
-* **StrategyQA** – multi-hop reasoning with implicit knowledge
-* **HotpotQA** – multi-hop question answering requiring reasoning across multiple facts
+This diversity allows comparison of how model scale and architecture affect self-correction behavior.
 
-Using multiple datasets allows evaluation of whether self-correction improves performance **consistently across task types**.
+Datasets
 
-## Metrics Collected
+The harness evaluates models on standardized reasoning benchmarks:
+
+Dataset	Task Type
+GSM8K	grade-school math reasoning
+HumanEval	code generation with unit tests
+ARC	multiple-choice scientific reasoning
+
+Using multiple datasets allows evaluation of whether self-correction improves performance consistently across different problem types.
+
+Self-Correction Strategies
+
+The system currently implements several evaluation strategies:
+
+Strategy	Description
+single_pass	model produces one answer
+self_refine	model generates → critiques → revises its answer
+best_of_n	multiple samples generated, best candidate selected
+oracle	theoretical upper bound if the correct answer appears in candidates
+
+These strategies allow controlled comparison of accuracy vs compute trade-offs.
+
+Metrics Collected
 
 For every model run the harness logs:
 
-* model output
-* correctness vs gold answer
-* inference latency
-* **token usage**
+model output
 
-  * input tokens
-  * output tokens
-  * total tokens
+correctness vs gold answer
 
-This enables analysis of **accuracy vs computational cost**.
+inference latency
 
-## Repository Structure
+token usage
 
-```
-configs/       model and task configs
+Token Usage
+
+input tokens
+
+output tokens
+
+total tokens
+
+This enables analysis of:
+
+accuracy
+
+latency
+
+token cost
+
+cost–performance tradeoffs
+
+Each experiment produces a structured log file:
+
+runs/run_<timestamp>/results.jsonl
+Repository Structure
+configs/       model and task configuration
 data/          dataset loaders
 models/        model provider implementations
-strategies/    self-correction strategies
-evaluators/    scoring and evaluation scripts
-analysis/      result analysis and plotting
+strategies/    self-correction strategy implementations
+evaluators/    scoring and evaluation logic
+analysis/      scripts for computing metrics and plots
 runs/          experiment outputs
 harness.py     main experiment runner
 logger.py      structured run logging
-```
+Running the Harness
 
-## Running the Harness
+Example run:
 
-Example:
+python harness.py --model gpt --task gsm8k --strategy single_pass
 
-```
-python harness.py --model gpt --limit 25
-```
+Run a smaller test subset:
 
-This runs the selected model on a subset of the evaluation dataset and logs results for analysis.
+python harness.py --model llama --task gsm8k --strategy self_refine --limit 25
 
-## Research Goal
+Results will be written to:
 
-The project investigates:
+runs/run_<timestamp>/
 
-**When does iterative self-correction improve LLM reliability relative to its computational cost?**
+Each run folder contains:
+
+meta.json
+results.jsonl
+Research Objective
+
+This project investigates:
+
+When does iterative self-correction improve LLM reliability relative to its computational cost?
+
+Specifically, the experiments aim to measure:
+
+whether refinement strategies increase accuracy
+
+how improvements vary across model scale
+
+the compute cost required to achieve those improvements
+
+The results help determine when self-correction is beneficial, neutral, or wasteful.
