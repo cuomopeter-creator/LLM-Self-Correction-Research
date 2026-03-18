@@ -34,6 +34,7 @@ def build_model(model_cfg: dict):
                 max_new_tokens=model_cfg.get("max_new_tokens", 512),
                 temperature=model_cfg.get("temperature", 0.0),
                 top_p=model_cfg.get("top_p", 1.0),
+                adapter_path=model_cfg.get("adapter_path"),
             )
         )
 

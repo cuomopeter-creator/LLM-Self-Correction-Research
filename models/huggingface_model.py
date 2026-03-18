@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
+from peft import PeftModel
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from models.base import BaseModel
@@ -16,6 +17,7 @@ class HFModelConfig:
     max_new_tokens: int = 256
     temperature: float = 0.0
     top_p: float = 1.0
+    adapter_path: str | None = None
 
 
 _DTYPE_MAP = {
@@ -31,7 +33,8 @@ class HuggingFaceModel(BaseModel):
         if cfg.dtype not in _DTYPE_MAP:
             raise ValueError(f"Unsupported dtype: {cfg.dtype}. Choose from {list(_DTYPE_MAP)}")
 
-        self.tok = AutoTokenizer.from_pretrained(cfg.model_id, use_fast=True)
+        tok_source = cfg.adapter_path if cfg.adapter_path else cfg.model_id
+        self.tok = AutoTokenizer.from_pretrained(tok_source, use_fast=True)
         if self.tok.pad_token is None and self.tok.eos_token is not None:
             self.tok.pad_token = self.tok.eos_token
 
@@ -40,6 +43,10 @@ class HuggingFaceModel(BaseModel):
             dtype=_DTYPE_MAP[cfg.dtype],
             device_map=cfg.device_map,
         )
+
+        if cfg.adapter_path:
+            self.model = PeftModel.from_pretrained(self.model, cfg.adapter_path)
+
         self.model.eval()
 
     @torch.inference_mode()
@@ -55,11 +62,14 @@ class HuggingFaceModel(BaseModel):
             add_generation_prompt=True,
         )
         inputs = self.tok(text_in, return_tensors="pt", padding=True)
-        # best-effort place inputs on same device
+
         if hasattr(self.model, "device") and self.model.device is not None:
             inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+        elif hasattr(self.model, "base_model") and hasattr(self.model.base_model, "device"):
+            inputs = {k: v.to(self.model.base_model.device) for k, v in inputs.items()}
 
-        gen = self.model.generate(use_cache=True, 
+        gen = self.model.generate(
+            use_cache=True,
             **inputs,
             max_new_tokens=max_new_tokens,
             do_sample=(temperature > 0),
