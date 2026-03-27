@@ -10,7 +10,7 @@ HERE = Path(__file__).resolve()
 PROJECT_ROOT = HERE.parents[1]
 
 DATA_PATH = PROJECT_ROOT / "experiments" / "prompt_visual_inspection.jsonl"
-CHAT_SCRIPT = PROJECT_ROOT / "scripts" / "chat_model.py"
+CHAT_SCRIPT = PROJECT_ROOT / "scripts" / "chat_scripts" / "chat_model.py"
 
 SYSTEM_PROMPT = (
     "Generate a Streamlit app snippet using plotly.express or plotly.graph_objects only. "

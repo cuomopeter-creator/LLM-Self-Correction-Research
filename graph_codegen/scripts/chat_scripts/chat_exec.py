@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 PLOTS_DIR = PROJECT_ROOT / "graph_codegen" / "past_plots"
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 
