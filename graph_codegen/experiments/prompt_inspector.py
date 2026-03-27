@@ -20,7 +20,7 @@ FALLBACK_JSONL_PATH = PROJECT_ROOT / "experiments" / "prompt_visual_inspection.j
 
 
 def get_latest_run_path() -> Path:
-    run_files = sorted(RUNS_DIR.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+    run_files = sorted(RUNS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
     if run_files:
         return run_files[0]
     return FALLBACK_JSONL_PATH
@@ -208,7 +208,7 @@ st.title("Prompt Visual Inspector")
 st.caption(f"Source: {JSONL_PATH.name}")
 st.caption(f"Ratings file: {METRICS_PATH.name}")
 
-records = load_jsonl(JSONL_PATH)
+records = json.loads(JSONL_PATH.read_text())["items"]
 saved_metrics = load_saved_metrics(METRICS_PATH)
 
 show_code = st.sidebar.checkbox("Show code", value=True)
@@ -273,12 +273,6 @@ for i, record in enumerate(page_records, start=start):
             record_key=f"record_{record_id}",
             output_container=output_container,
         )
-        if fig is not None:
-            output_container.plotly_chart(
-                fig,
-                use_container_width=True,
-                key=f"final_plot_{record_id}",
-            )
     except Exception as e:
         output_container.error(f"Execution failed: {e}")
 
