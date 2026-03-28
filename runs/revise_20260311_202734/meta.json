@@ -1,0 +1,14 @@
+{
+  "run_id": "revise_20260311_202734",
+  "created_at_utc": 1773260854.071003,
+  "model_name": "claude_reviser",
+  "model_cfg": {
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
+    "api_key_env": "ANTHROPIC_API_KEY",
+    "max_tokens": 1200,
+    "temperature": 0.0
+  },
+  "strategy_name": "dataset_revision",
+  "task_name": "plotly_streamlit_repair"
+}

@@ -1,0 +1,16 @@
+{
+  "run_id": "run_20260309_201145",
+  "created_at_utc": 1773087105.6295974,
+  "model_name": "qwen",
+  "model_cfg": {
+    "provider": "huggingface",
+    "model_id": "Qwen/Qwen2.5-7B-Instruct",
+    "dtype": "float16",
+    "device_map": "cuda:0",
+    "max_new_tokens": 512,
+    "temperature": 0.0,
+    "top_p": 1.0
+  },
+  "strategy_name": "best_of_n",
+  "task_name": "gsm8k"
+}

@@ -1,0 +1,14 @@
+{
+  "run_id": "run_20260315_055426",
+  "created_at_utc": 1773554066.039692,
+  "model_name": "kimi",
+  "model_cfg": {
+    "provider": "fireworks",
+    "model": "accounts/fireworks/models/kimi-k2-instruct-0905",
+    "api_key_env": "FIREWORKS_API_KEY",
+    "max_tokens": 512,
+    "temperature": 0.0
+  },
+  "strategy_name": "oracle",
+  "task_name": "arc"
+}

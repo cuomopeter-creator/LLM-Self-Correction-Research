@@ -1,0 +1,14 @@
+{
+  "run_id": "run_20260305_170708",
+  "created_at_utc": 1772730428.2380235,
+  "model_name": "claude_3_7_sonnet",
+  "model_cfg": {
+    "provider": "anthropic",
+    "model": "claude-3-7-sonnet-latest",
+    "api_key_env": "ANTHROPIC_API_KEY",
+    "max_tokens": 256,
+    "temperature": 0.0
+  },
+  "strategy_name": "single_pass",
+  "task_name": "gsm8k_test"
+}

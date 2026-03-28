@@ -1,0 +1,16 @@
+{
+  "run_id": "run_20260315_000053",
+  "created_at_utc": 1773532853.7577047,
+  "model_name": "llama",
+  "model_cfg": {
+    "provider": "huggingface",
+    "model_id": "meta-llama/Meta-Llama-3-8B-Instruct",
+    "dtype": "float16",
+    "device_map": "cuda:0",
+    "max_new_tokens": 512,
+    "temperature": 0.0,
+    "top_p": 1.0
+  },
+  "strategy_name": "self_refine",
+  "task_name": "truthfulqa"
+}

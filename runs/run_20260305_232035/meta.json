@@ -1,0 +1,14 @@
+{
+  "run_id": "run_20260305_232035",
+  "created_at_utc": 1772752835.754417,
+  "model_name": "mistral",
+  "model_cfg": {
+    "provider": "fireworks",
+    "model": "accounts/fireworks/models/mixtral-8x22b-instruct",
+    "api_key_env": "FIREWORKS_API_KEY",
+    "max_tokens": 256,
+    "temperature": 0.0
+  },
+  "strategy_name": "single_pass",
+  "task_name": "gsm8k_test"
+}

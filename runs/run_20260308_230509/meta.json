@@ -1,0 +1,14 @@
+{
+  "run_id": "run_20260308_230509",
+  "created_at_utc": 1773011109.6338658,
+  "model_name": "gpt",
+  "model_cfg": {
+    "provider": "openai",
+    "model": "gpt-5.3-chat-latest",
+    "api_key_env": "OPENAI_API_KEY",
+    "max_output_tokens": 512,
+    "temperature": 0.0
+  },
+  "strategy_name": "single_pass",
+  "task_name": "gsm8k"
+}
