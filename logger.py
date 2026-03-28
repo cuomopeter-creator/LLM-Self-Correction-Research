@@ -7,6 +7,18 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, tuple):
+        return [_json_safe(v) for v in value]
+    return value
+
+
 @dataclass
 class RunMeta:
     run_id: str
@@ -47,7 +59,7 @@ class JSONLLogger:
             "output": output,
             "latency_s": latency_s,
             "score": score,
-            "extra": extra or {},
+            "extra": _json_safe(extra or {}),
         }
         with self.results_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")

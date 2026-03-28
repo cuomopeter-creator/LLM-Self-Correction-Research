@@ -9,8 +9,8 @@ __pycache__/
 venv/
 
 # outputs
-runs/
 logs/
+**/run_*.sh
 
 # big model artifacts
 models/weights/
