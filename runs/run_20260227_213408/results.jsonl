@@ -1,5 +1,0 @@
-{"ts_utc": 1772228053.0636976, "example_id": "1", "prompt": "Solve: If a store sells pencils in packs of 6, how many pencils are in 4 packs? Give only the number.", "output": "24", "latency_s": 4.594632148742676, "score": null, "extra": {}}
-{"ts_utc": 1772228056.6393847, "example_id": "2", "prompt": "Solve: A car travels 30 miles per hour for 2 hours. How many miles? Give only the number.", "output": "60", "latency_s": 3.5726780891418457, "score": null, "extra": {}}
-{"ts_utc": 1772228059.0100749, "example_id": "3", "prompt": "Solve: You have 15 apples and give away 7. How many left? Give only the number.", "output": "8", "latency_s": 2.368338108062744, "score": null, "extra": {}}
-{"ts_utc": 1772228061.3743355, "example_id": "4", "prompt": "Solve: If 3 notebooks cost $12, how much does 1 cost? Give only the number.", "output": "4", "latency_s": 2.3616554737091064, "score": null, "extra": {}}
-{"ts_utc": 1772228064.8985837, "example_id": "5", "prompt": "Solve: What is 9*8? Give only the number.", "output": "72", "latency_s": 3.5157694816589355, "score": null, "extra": {}}
