@@ -22,6 +22,9 @@ from strategies.best_of_n import run_best_of_n
 from strategies.self_refine import run_self_refine
 from strategies.oracle_feedback import run_oracle_feedback
 
+ALL_TASKS = ["gsm8k", "truthfulqa", "humaneval", "arc"]
+ALL_STRATEGIES = ["single_pass", "best_of_n", "self_refine", "oracle"]
+
 
 def load_yaml(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as f:
@@ -87,14 +90,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--task",
         default="gsm8k",
-        choices=["gsm8k", "truthfulqa", "humaneval", "arc"],
+        choices=ALL_TASKS + ["all"],
         help="Task to run.",
     )
 
     p.add_argument(
         "--strategy",
         default="single_pass",
-        choices=["single_pass", "best_of_n", "self_refine", "oracle"],
+        choices=ALL_STRATEGIES + ["all"],
         help="Strategy to use.",
     )
 
@@ -172,15 +175,26 @@ def generate_with_model(model, model_cfg: dict, prompt: str):
     )
 
 
-def main():
-    args = parse_args()
+def resolve_limits(task: str, default_limit: int) -> int:
+    if task == "humaneval":
+        return 40
+    return default_limit
 
-    cfg = load_yaml("configs/models.yaml")
-    model_key = args.model
-    model_cfg = cfg["models"][model_key]
 
+def iter_run_matrix(task_arg: str, strategy_arg: str):
+    tasks = ALL_TASKS if task_arg == "all" else [task_arg]
+    strategies = ALL_STRATEGIES if strategy_arg == "all" else [strategy_arg]
+
+    for task in tasks:
+        for strategy in strategies:
+            if task == "humaneval" and strategy == "oracle":
+                print("Skipping unsupported combination: task=humaneval strategy=oracle")
+                continue
+            yield task, strategy
+
+
+def run_experiment(*, model_key: str, model_cfg: dict, task: str, strategy: str, limit: int):
     model = build_model(model_cfg)
-
     run_id = make_run_id()
     run_dir = f"runs/{run_id}"
     logger = JSONLLogger(
@@ -190,41 +204,41 @@ def main():
             created_at_utc=time.time(),
             model_name=model_key,
             model_cfg=model_cfg,
-            strategy_name=args.strategy,
-            task_name=args.task,
+            strategy_name=strategy,
+            task_name=task,
         ),
     )
     #loading examples happens inside the loop to ensure we capture any loading errors in the logs, and to allow for partial results if loading fails partway through
-    for ex in load_examples(args.task, args.limit):
+    for ex in load_examples(task, limit):
         t0 = time.time()
-        if args.strategy == "single_pass":
+        if strategy == "single_pass":
             result = run_single_pass(
                 model=model,
                 prompt=ex.prompt,
                 model_cfg=model_cfg,
             )
-        elif args.strategy == "best_of_n":
+        elif strategy == "best_of_n":
             result = run_best_of_n(
                 model=model,
                 prompt=ex.prompt,
                 model_cfg=model_cfg,
                 n=3,
             )
-        elif args.strategy == "self_refine":
+        elif strategy == "self_refine":
             result = run_self_refine(
                 model=model,
                 prompt=ex.prompt,
                 model_cfg=model_cfg,
             )
-        elif args.strategy == "oracle":
-            if args.task == "gsm8k":
+        elif strategy == "oracle":
+            if task == "gsm8k":
                 evaluator = lambda output, gold=ex.answer: oracle_math_correct(output, gold)
-            elif args.task == "arc":
+            elif task == "arc":
                 evaluator = lambda output, gold=ex.answer: evaluate_qa(output, gold).correct
-            elif args.task == "truthfulqa":
+            elif task == "truthfulqa":
                 evaluator = lambda output, gold=ex.answer: evaluate_qa(output, gold).correct
             else:
-                raise ValueError(f"Oracle strategy not yet supported for task: {args.task}")
+                raise ValueError(f"Oracle strategy not yet supported for task: {task}")
 
             oracle_res = run_oracle_feedback(
                 model=model,
@@ -253,7 +267,7 @@ def main():
                 },
             }
         else:
-            raise ValueError(f"Unknown strategy: {args.strategy}")
+            raise ValueError(f"Unknown strategy: {strategy}")
         #latency is measured here to capture total time taken including evaluation and any additional steps in the strategy, not just generation time, since we want to capture total cost of the strategy
         latency = time.time() - t0
         #unwrap generation result to get final output text and usage info (if available)
@@ -266,7 +280,7 @@ def main():
         pred = ""
         gold_norm = ""
 
-        if args.task == "humaneval":
+        if task == "humaneval":
             try:
                 res = evaluate_humaneval(
                     prompt=ex.prompt,
@@ -281,7 +295,7 @@ def main():
                 score = False
                 eval_stderr = str(e)
 
-        elif args.task == "gsm8k":
+        elif task == "gsm8k":
             try:
                 res = evaluate_math(out, ex.answer)
                 score = res.correct
@@ -291,7 +305,7 @@ def main():
                 score = False
                 eval_stderr = str(e)
 
-        elif args.task in ("arc", "truthfulqa"):
+        elif task in ("arc", "truthfulqa"):
             try:
                 res = evaluate_qa(out, ex.answer)
                 score = res.correct
@@ -305,7 +319,7 @@ def main():
         print(f"OUTPUT: {out}")
         if usage:
             print(f"USAGE: {usage}")
-        if args.task in ("gsm8k", "arc", "truthfulqa"):
+        if task in ("gsm8k", "arc", "truthfulqa"):
             print(f"PRED: {pred}")
             print(f"GOLD: {gold_norm}")
             print(f"CORRECT: {score}")
@@ -336,7 +350,24 @@ def main():
     print(f"Logged to: {run_dir}/results.jsonl")
 
 
+def main():
+    args = parse_args()
+
+    cfg = load_yaml("configs/models.yaml")
+    model_key = args.model
+    model_cfg = cfg["models"][model_key]
+
+    for task, strategy in iter_run_matrix(args.task, args.strategy):
+        limit = resolve_limits(task, args.limit)
+        print(f"Starting run: model={model_key} task={task} strategy={strategy} limit={limit}")
+        run_experiment(
+            model_key=model_key,
+            model_cfg=model_cfg,
+            task=task,
+            strategy=strategy,
+            limit=limit,
+        )
+
+
 if __name__ == "__main__":
     main()
-
-

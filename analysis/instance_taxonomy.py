@@ -3,407 +3,411 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-import sys
+from typing import Any
 
 import pandas as pd
 
+from analysis.load_results import load_results_jsonl_flat
+from data.loaders import load_arc, load_gsm8k, load_humaneval, load_truthfulqa
+from evaluators.code_evaluator import evaluate_humaneval
+from evaluators.math_evaluator import evaluate_math
+from evaluators.qa_evaluator import evaluate_qa
+
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-ANALYSIS_DIR = PROJECT_ROOT / "analysis"
-MANIFEST_PATH = ANALYSIS_DIR / "run_manifest.csv"
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+RUNS_DIR = PROJECT_ROOT / "runs"
+DEFAULT_MANIFEST = PROJECT_ROOT / "analysis" / "run_manifest.csv"
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data"
 
-from analysis.compute_metrics import load_all_examples
+PAIRWISE_COMPARISONS = [
+    ("single_pass", "best_of_n"),
+    ("single_pass", "self_refine"),
+]
 
 
-def _load_manifest(path: str | Path = MANIFEST_PATH) -> pd.DataFrame:
-    manifest = pd.read_csv(path)
+def _load_manifest(path: Path) -> pd.DataFrame:
+    df = pd.read_csv(path)
     required = {"model", "task", "strategy", "run_dir"}
-    missing = required.difference(manifest.columns)
+    missing = required - set(df.columns)
     if missing:
-        raise ValueError(f"Manifest is missing required columns: {sorted(missing)}")
-    return manifest
+        raise ValueError(f"Manifest missing required columns: {sorted(missing)}")
+    return df
 
 
-def _load_canonical_examples(manifest: pd.DataFrame) -> pd.DataFrame:
-    selected_runs = manifest["run_dir"].dropna().astype(str).tolist()
-    df = load_all_examples(run_names=selected_runs, min_results=1)
-
-    keep_cols = [
-        "run_dir",
-        "model",
-        "task",
-        "strategy",
-        "example_id",
-        "score_int",
-        "output",
-        "pred",
-        "gold",
-        "latency_s",
-        "usage_total_total_tokens",
-        "usage_total_tokens",
-        "usage_input_tokens",
-        "usage_output_tokens",
-        "all_outputs_json",
-        "intermediate_steps_json",
-    ]
-    present = [c for c in keep_cols if c in df.columns]
-    work = df[present].copy()
-    work["example_id"] = work["example_id"].astype(str)
-    work["score_int"] = pd.to_numeric(work["score_int"], errors="coerce")
-    return work
+def _select_latest_runs(manifest: pd.DataFrame) -> pd.DataFrame:
+    work = manifest.copy()
+    work["run_dir"] = work["run_dir"].astype(str)
+    work["n_examples"] = pd.to_numeric(work["n_examples"], errors="coerce")
+    latest = (
+        work.sort_values(["model", "task", "strategy", "n_examples", "run_dir"])
+        .groupby(["model", "task", "strategy", "n_examples"], as_index=False)
+        .tail(1)
+        .reset_index(drop=True)
+    )
+    return latest
 
 
-def _label_transition(
-    baseline_correct: float | int | None,
-    comparison_correct: float | int | None,
-) -> str:
-    if pd.isna(baseline_correct) or pd.isna(comparison_correct):
-        return "missing"
+def _load_dataset_lookup(task: str) -> dict[str, Any]:
+    if task == "gsm8k":
+        return {str(ex.id): ex for ex in load_gsm8k(limit=None)}
+    if task == "arc":
+        return {str(ex.id): ex for ex in load_arc(limit=None)}
+    if task == "truthfulqa":
+        return {str(ex.id): ex for ex in load_truthfulqa(limit=None)}
+    if task == "humaneval":
+        return {str(ex.id): ex for ex in load_humaneval(limit=None)}
+    raise ValueError(f"Unsupported task: {task}")
 
-    b = int(baseline_correct)
-    c = int(comparison_correct)
+
+def _score_output(task: str, output: str, example: Any) -> tuple[int, str, str]:
+    if task == "gsm8k":
+        res = evaluate_math(output, example.answer)
+        return int(res.correct), res.pred, res.gold
+    if task in {"arc", "truthfulqa"}:
+        res = evaluate_qa(output, example.answer)
+        return int(res.correct), res.pred, res.gold
+    if task == "humaneval":
+        res = evaluate_humaneval(
+            prompt=example.prompt,
+            completion=output,
+            test_code=example.test,
+            entry_point=example.entry_point,
+        )
+        return int(res.passed), output, example.entry_point or ""
+    raise ValueError(f"Unsupported task: {task}")
+
+
+def _transition_label(baseline_score: Any, comparison_score: Any) -> str:
+    b = int(baseline_score)
+    c = int(comparison_score)
     if b == 1 and c == 1:
         return "correct_to_correct"
-    if b == 0 and c == 1:
-        return "incorrect_to_correct"
     if b == 1 and c == 0:
         return "correct_to_incorrect"
+    if b == 0 and c == 1:
+        return "incorrect_to_correct"
     return "incorrect_to_incorrect"
 
 
-def build_pairwise_taxonomy(
-    df_examples: pd.DataFrame,
-    manifest: pd.DataFrame,
+def _load_run_df(run_dir: str) -> pd.DataFrame:
+    df = load_results_jsonl_flat(RUNS_DIR / run_dir / "results.jsonl").copy()
+    df["example_id"] = df["example_id"].astype(str)
+    return df
+
+
+def _build_pairwise_details(
+    latest_runs: pd.DataFrame,
     baseline_strategy: str,
     comparison_strategy: str,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    manifest_pair = manifest[manifest["strategy"].isin([baseline_strategy, comparison_strategy])]
-    valid_pairs = (
-        manifest_pair.groupby(["model", "task"])["strategy"]
-        .nunique()
-        .reset_index(name="n_strategies")
-    )
-    valid_pairs = valid_pairs[valid_pairs["n_strategies"] == 2][["model", "task"]]
+) -> pd.DataFrame:
+    rows: list[pd.DataFrame] = []
 
-    work = df_examples.merge(valid_pairs, on=["model", "task"], how="inner")
+    for _, base_meta in latest_runs[latest_runs["strategy"] == baseline_strategy].iterrows():
+        comp_matches = latest_runs[
+            (latest_runs["model"] == base_meta["model"])
+            & (latest_runs["task"] == base_meta["task"])
+            & (latest_runs["n_examples"] == base_meta["n_examples"])
+            & (latest_runs["strategy"] == comparison_strategy)
+        ]
+        if comp_matches.empty:
+            continue
 
-    baseline = work[work["strategy"] == baseline_strategy].copy()
-    comparison = work[work["strategy"] == comparison_strategy].copy()
+        comp_meta = comp_matches.iloc[0]
+        base_df = _load_run_df(str(base_meta["run_dir"]))
+        comp_df = _load_run_df(str(comp_meta["run_dir"]))
 
-    baseline = baseline.rename(
-        columns={
-            "run_dir": "baseline_run_dir",
-            "score_int": "baseline_score_int",
-            "output": "baseline_output",
-            "pred": "baseline_pred",
-            "gold": "baseline_gold",
-            "latency_s": "baseline_latency_s",
-            "usage_total_total_tokens": "baseline_usage_total_total_tokens",
-            "usage_total_tokens": "baseline_usage_total_tokens",
-            "usage_input_tokens": "baseline_usage_input_tokens",
-            "usage_output_tokens": "baseline_usage_output_tokens",
-        }
-    )
-    comparison = comparison.rename(
-        columns={
-            "run_dir": "comparison_run_dir",
-            "score_int": "comparison_score_int",
-            "output": "comparison_output",
-            "pred": "comparison_pred",
-            "gold": "comparison_gold",
-            "latency_s": "comparison_latency_s",
-            "usage_total_total_tokens": "comparison_usage_total_total_tokens",
-            "usage_total_tokens": "comparison_usage_total_tokens",
-            "usage_input_tokens": "comparison_usage_input_tokens",
-            "usage_output_tokens": "comparison_usage_output_tokens",
-            "all_outputs_json": "comparison_all_outputs_json",
-            "intermediate_steps_json": "comparison_intermediate_steps_json",
-        }
-    )
-
-    merged = baseline.merge(
-        comparison,
-        on=["model", "task", "example_id"],
-        how="inner",
-        validate="one_to_one",
-    )
-    merged["baseline_strategy"] = baseline_strategy
-    merged["comparison_strategy"] = comparison_strategy
-    merged["transition_label"] = merged.apply(
-        lambda row: _label_transition(
-            row["baseline_score_int"],
-            row["comparison_score_int"],
-        ),
-        axis=1,
-    )
-
-    summary = (
-        merged.groupby(
-            ["model", "task", "baseline_strategy", "comparison_strategy", "transition_label"],
-            dropna=False,
+        merged = base_df.merge(
+            comp_df,
+            on="example_id",
+            suffixes=("_x", "_y"),
+            how="inner",
         )
-        .size()
-        .reset_index(name="n_examples")
-    )
+        if merged.empty:
+            continue
 
-    totals = (
-        merged.groupby(
-            ["model", "task", "baseline_strategy", "comparison_strategy"],
-            dropna=False,
+        merged["baseline_run_dir"] = str(base_meta["run_dir"])
+        merged["comparison_run_dir"] = str(comp_meta["run_dir"])
+        merged["model"] = str(base_meta["model"])
+        merged["task"] = str(base_meta["task"])
+        merged["strategy_x"] = baseline_strategy
+        merged["strategy_y"] = comparison_strategy
+        merged["baseline_strategy"] = baseline_strategy
+        merged["comparison_strategy"] = comparison_strategy
+        merged["transition_label"] = merged.apply(
+            lambda row: _transition_label(row["score_int_x"], row["score_int_y"]),
+            axis=1,
         )
-        .size()
-        .reset_index(name="n_total_examples")
-    )
 
-    summary = summary.merge(
-        totals,
-        on=["model", "task", "baseline_strategy", "comparison_strategy"],
-        how="left",
-    )
-    summary["share_examples"] = summary["n_examples"] / summary["n_total_examples"]
-
-    pivot = (
-        summary.pivot_table(
-            index=["model", "task", "baseline_strategy", "comparison_strategy", "n_total_examples"],
-            columns="transition_label",
-            values="n_examples",
-            fill_value=0,
-        )
-        .reset_index()
-    )
-
-    for col in [
-        "correct_to_correct",
-        "incorrect_to_correct",
-        "correct_to_incorrect",
-        "incorrect_to_incorrect",
-    ]:
-        if col not in pivot.columns:
-            pivot[col] = 0
-
-    pivot["revision_success_rate"] = (
-        pivot["incorrect_to_correct"]
-        / (pivot["incorrect_to_correct"] + pivot["incorrect_to_incorrect"])
-    ).fillna(0.0)
-    pivot["error_amplification_rate"] = (
-        pivot["correct_to_incorrect"]
-        / (pivot["correct_to_correct"] + pivot["correct_to_incorrect"])
-    ).fillna(0.0)
-    pivot["net_gain_examples"] = (
-        pivot["incorrect_to_correct"] - pivot["correct_to_incorrect"]
-    )
-    pivot["net_gain_rate"] = pivot["net_gain_examples"] / pivot["n_total_examples"]
-
-    pivot = pivot.sort_values(["model", "task"]).reset_index(drop=True)
-    merged = merged.sort_values(["model", "task", "example_id"]).reset_index(drop=True)
-
-    return merged, pivot
-
-
-def build_self_refine_internal_taxonomy(
-    df_examples: pd.DataFrame,
-    manifest: pd.DataFrame,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    valid_pairs = manifest[manifest["strategy"] == "self_refine"][["model", "task"]].drop_duplicates()
-    work = df_examples.merge(valid_pairs, on=["model", "task"], how="inner")
-    work = work[work["strategy"] == "self_refine"].copy()
-
-    def extract_draft(row: pd.Series) -> str | None:
-        raw = row.get("all_outputs_json")
-        if not isinstance(raw, str) or not raw.strip():
-            return None
-        try:
-            items = json.loads(raw)
-        except Exception:
-            return None
-        if not items:
-            return None
-        first = items[0]
-        if isinstance(first, dict):
-            return str(first.get("text", "")).strip()
-        return str(first).strip()
-
-    def score_like_final(row: pd.Series, text: str | None) -> float | int | None:
-        if text is None:
-            return pd.NA
-        pred = row.get("pred")
-        gold = row.get("gold")
-        if pred is None or gold is None:
-            return pd.NA
-        pred = str(pred).strip()
-        gold = str(gold).strip()
-        text_norm = str(text).strip()
-
-        # Match the simple exact/string-normalized nature of the stored outputs.
-        if pred == gold:
-            return 1 if text_norm == row.get("output", text_norm) else pd.NA
-        return 0 if text_norm == row.get("output", text_norm) else pd.NA
-
-    work["draft_output"] = work.apply(extract_draft, axis=1)
-    work["draft_score_int"] = work.apply(
-        lambda row: 1 if isinstance(row["draft_output"], str) and str(row.get("gold", "")).strip() and str(row["draft_output"]).strip() == str(row.get("gold", "")).strip()
-        else (
-            0 if isinstance(row["draft_output"], str) and str(row.get("gold", "")).strip()
-            else pd.NA
-        ),
-        axis=1,
-    )
-
-    # Use draft exact-vs-gold comparison as a conservative internal estimate.
-    work["baseline_strategy"] = "self_refine_draft"
-    work["comparison_strategy"] = "self_refine_final"
-    work["baseline_run_dir"] = work["run_dir"]
-    work["comparison_run_dir"] = work["run_dir"]
-    work["baseline_score_int"] = pd.to_numeric(work["draft_score_int"], errors="coerce")
-    work["comparison_score_int"] = pd.to_numeric(work["score_int"], errors="coerce")
-    work["baseline_output"] = work["draft_output"]
-    work["comparison_output"] = work["output"]
-    work["transition_label"] = work.apply(
-        lambda row: _label_transition(row["baseline_score_int"], row["comparison_score_int"]),
-        axis=1,
-    )
-
-    details = work[
-        [
+        keep_cols = [
+            "baseline_run_dir",
             "model",
             "task",
+            "strategy_x",
             "example_id",
+            "score_int_x",
+            "output_x",
+            "pred_x",
+            "gold_x",
+            "latency_s_x",
+            "usage_total_total_tokens_x",
+            "usage_total_tokens_x",
+            "usage_input_tokens_x",
+            "usage_output_tokens_x",
+            "all_outputs_json_x",
+            "intermediate_steps_json_x",
+            "comparison_run_dir",
+            "strategy_y",
+            "score_int_y",
+            "output_y",
+            "pred_y",
+            "gold_y",
+            "latency_s_y",
+            "usage_total_total_tokens_y",
+            "usage_total_tokens_y",
+            "usage_input_tokens_y",
+            "usage_output_tokens_y",
+            "all_outputs_json_y",
+            "intermediate_steps_json_y",
             "baseline_strategy",
             "comparison_strategy",
-            "baseline_run_dir",
-            "comparison_run_dir",
-            "baseline_score_int",
-            "comparison_score_int",
-            "baseline_output",
-            "comparison_output",
             "transition_label",
-            "gold",
-            "pred",
-            "run_dir",
         ]
-    ].copy()
-
-    summary = (
-        details.groupby(
-            ["model", "task", "baseline_strategy", "comparison_strategy", "transition_label"],
-            dropna=False,
+        details = merged[keep_cols].rename(
+            columns={
+                "score_int_x": "baseline_score_int",
+                "output_x": "baseline_output",
+                "pred_x": "baseline_pred",
+                "gold_x": "baseline_gold",
+                "latency_s_x": "baseline_latency_s",
+                "usage_total_total_tokens_x": "baseline_usage_total_total_tokens",
+                "usage_total_tokens_x": "baseline_usage_total_tokens",
+                "usage_input_tokens_x": "baseline_usage_input_tokens",
+                "usage_output_tokens_x": "baseline_usage_output_tokens",
+                "all_outputs_json_x": "all_outputs_json",
+                "intermediate_steps_json_x": "intermediate_steps_json",
+                "score_int_y": "comparison_score_int",
+                "output_y": "comparison_output",
+                "pred_y": "comparison_pred",
+                "gold_y": "comparison_gold",
+                "latency_s_y": "comparison_latency_s",
+                "usage_total_total_tokens_y": "comparison_usage_total_total_tokens",
+                "usage_total_tokens_y": "comparison_usage_total_tokens",
+                "usage_input_tokens_y": "comparison_usage_input_tokens",
+                "usage_output_tokens_y": "comparison_usage_output_tokens",
+                "all_outputs_json_y": "comparison_all_outputs_json",
+                "intermediate_steps_json_y": "comparison_intermediate_steps_json",
+            }
         )
-        .size()
-        .reset_index(name="n_examples")
-    )
-    totals = (
-        details.groupby(["model", "task", "baseline_strategy", "comparison_strategy"], dropna=False)
-        .size()
-        .reset_index(name="n_total_examples")
-    )
-    summary = summary.merge(
-        totals,
-        on=["model", "task", "baseline_strategy", "comparison_strategy"],
-        how="left",
-    )
-    summary["share_examples"] = summary["n_examples"] / summary["n_total_examples"]
+        rows.append(details)
 
-    pivot = (
-        summary.pivot_table(
-            index=["model", "task", "baseline_strategy", "comparison_strategy", "n_total_examples"],
-            columns="transition_label",
-            values="n_examples",
-            fill_value=0,
+    if not rows:
+        return pd.DataFrame()
+
+    out = pd.concat(rows, ignore_index=True)
+    out = out.sort_values(
+        ["model", "task", "baseline_run_dir", "comparison_run_dir", "example_id"]
+    ).reset_index(drop=True)
+    return out
+
+
+def _build_pairwise_summary(details: pd.DataFrame) -> pd.DataFrame:
+    records = []
+    for (model, task, baseline_strategy, comparison_strategy), group in details.groupby(
+        ["model", "task", "baseline_strategy", "comparison_strategy"],
+        dropna=False,
+    ):
+        cc = float((group["transition_label"] == "correct_to_correct").sum())
+        ci = float((group["transition_label"] == "correct_to_incorrect").sum())
+        ic = float((group["transition_label"] == "incorrect_to_correct").sum())
+        ii = float((group["transition_label"] == "incorrect_to_incorrect").sum())
+        records.append(
+            {
+                "model": model,
+                "task": task,
+                "baseline_strategy": baseline_strategy,
+                "comparison_strategy": comparison_strategy,
+                "n_total_examples": int(len(group)),
+                "correct_to_correct": cc,
+                "correct_to_incorrect": ci,
+                "incorrect_to_correct": ic,
+                "incorrect_to_incorrect": ii,
+                "revision_success_rate": (ic / (ic + ii)) if (ic + ii) else 0.0,
+                "error_amplification_rate": (ci / (cc + ci)) if (cc + ci) else 0.0,
+                "net_gain_examples": ic - ci,
+                "net_gain_rate": (ic - ci) / len(group) if len(group) else 0.0,
+            }
         )
-        .reset_index()
+    return pd.DataFrame(records).sort_values(["model", "task"]).reset_index(drop=True)
+
+
+def _build_self_refine_draft_details(latest_runs: pd.DataFrame) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    dataset_cache: dict[str, dict[str, Any]] = {}
+
+    self_refine_runs = latest_runs[latest_runs["strategy"] == "self_refine"]
+    for _, meta in self_refine_runs.iterrows():
+        task = str(meta["task"])
+        model = str(meta["model"])
+        run_dir = str(meta["run_dir"])
+        if task not in dataset_cache:
+            dataset_cache[task] = _load_dataset_lookup(task)
+
+        run_df = _load_run_df(run_dir)
+        for _, row in run_df.iterrows():
+            example_id = str(row["example_id"])
+            example = dataset_cache[task].get(example_id)
+            if example is None:
+                continue
+
+            steps = json.loads(row["intermediate_steps_json"] or "[]")
+            draft_step = next(
+                (
+                    step
+                    for step in steps
+                    if isinstance(step, dict) and step.get("step") == "initial_draft"
+                ),
+                None,
+            )
+            if not draft_step:
+                rows.append(
+                    {
+                        "model": model,
+                        "task": task,
+                        "example_id": example_id,
+                        "baseline_strategy": "self_refine_draft",
+                        "comparison_strategy": "self_refine_final",
+                        "baseline_run_dir": run_dir,
+                        "comparison_run_dir": run_dir,
+                        "baseline_score_int": pd.NA,
+                        "comparison_score_int": row["score_int"],
+                        "baseline_output": pd.NA,
+                        "comparison_output": row["output"],
+                        "transition_label": "missing",
+                        "gold": row["gold"],
+                        "pred": row["pred"],
+                        "run_dir": run_dir,
+                    }
+                )
+                continue
+
+            draft_output = str(draft_step.get("draft", ""))
+            draft_score, draft_pred, draft_gold = _score_output(task, draft_output, example)
+            final_score = int(row["score_int"])
+            rows.append(
+                {
+                    "model": model,
+                    "task": task,
+                    "example_id": example_id,
+                    "baseline_strategy": "self_refine_draft",
+                    "comparison_strategy": "self_refine_final",
+                    "baseline_run_dir": run_dir,
+                    "comparison_run_dir": run_dir,
+                    "baseline_score_int": draft_score,
+                    "comparison_score_int": final_score,
+                    "baseline_output": draft_output,
+                    "comparison_output": row["output"],
+                    "transition_label": _transition_label(draft_score, final_score),
+                    "gold": draft_gold,
+                    "pred": row["pred"] if task != "humaneval" else draft_pred,
+                    "run_dir": run_dir,
+                }
+            )
+
+    if not rows:
+        return pd.DataFrame()
+
+    out = pd.DataFrame(rows).sort_values(["model", "task", "run_dir", "example_id"])
+    return out.reset_index(drop=True)
+
+
+def _build_self_refine_draft_summary(details: pd.DataFrame) -> pd.DataFrame:
+    records = []
+    for (model, task, baseline_strategy, comparison_strategy), group in details.groupby(
+        ["model", "task", "baseline_strategy", "comparison_strategy"],
+        dropna=False,
+    ):
+        cc = float((group["transition_label"] == "correct_to_correct").sum())
+        ci = float((group["transition_label"] == "correct_to_incorrect").sum())
+        ic = float((group["transition_label"] == "incorrect_to_correct").sum())
+        ii = float((group["transition_label"] == "incorrect_to_incorrect").sum())
+        missing = float((group["transition_label"] == "missing").sum())
+        valid = group[group["transition_label"] != "missing"]
+        records.append(
+            {
+                "model": model,
+                "task": task,
+                "baseline_strategy": baseline_strategy,
+                "comparison_strategy": comparison_strategy,
+                "n_total_examples": int(len(group)),
+                "correct_to_correct": cc,
+                "correct_to_incorrect": ci,
+                "incorrect_to_correct": ic,
+                "incorrect_to_incorrect": ii,
+                "missing": missing,
+                "revision_success_rate": (ic / (ic + ii)) if (ic + ii) else 0.0,
+                "error_amplification_rate": (ci / (cc + ci)) if (cc + ci) else 0.0,
+                "net_gain_examples": ic - ci,
+                "net_gain_rate": (ic - ci) / len(valid) if len(valid) else 0.0,
+            }
+        )
+    return pd.DataFrame(records).sort_values(["model", "task"]).reset_index(drop=True)
+
+
+def write_outputs(manifest_path: Path, output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest = _load_manifest(manifest_path)
+    latest_runs = _select_latest_runs(manifest)
+
+    for baseline_strategy, comparison_strategy in PAIRWISE_COMPARISONS:
+        details = _build_pairwise_details(latest_runs, baseline_strategy, comparison_strategy)
+        summary = _build_pairwise_summary(details)
+        details_path = (
+            output_dir
+            / f"instance_taxonomy_details_{baseline_strategy}_vs_{comparison_strategy}.csv"
+        )
+        summary_path = (
+            output_dir
+            / f"instance_taxonomy_summary_{baseline_strategy}_vs_{comparison_strategy}.csv"
+        )
+        details.to_csv(details_path, index=False)
+        summary.to_csv(summary_path, index=False)
+
+    draft_details = _build_self_refine_draft_details(latest_runs)
+    draft_summary = _build_self_refine_draft_summary(draft_details)
+    draft_details.to_csv(
+        output_dir / "instance_taxonomy_details_self_refine_draft_vs_final.csv",
+        index=False,
     )
-    for col in [
-        "correct_to_correct",
-        "incorrect_to_correct",
-        "correct_to_incorrect",
-        "incorrect_to_incorrect",
-        "missing",
-    ]:
-        if col not in pivot.columns:
-            pivot[col] = 0
-
-    pivot["revision_success_rate"] = (
-        pivot["incorrect_to_correct"]
-        / (pivot["incorrect_to_correct"] + pivot["incorrect_to_incorrect"])
-    ).fillna(0.0)
-    pivot["error_amplification_rate"] = (
-        pivot["correct_to_incorrect"]
-        / (pivot["correct_to_correct"] + pivot["correct_to_incorrect"])
-    ).fillna(0.0)
-    pivot["net_gain_examples"] = pivot["incorrect_to_correct"] - pivot["correct_to_incorrect"]
-    pivot["net_gain_rate"] = pivot["net_gain_examples"] / pivot["n_total_examples"]
-
-    details = details.sort_values(["model", "task", "example_id"]).reset_index(drop=True)
-    pivot = pivot.sort_values(["model", "task"]).reset_index(drop=True)
-    return details, pivot
+    draft_summary.to_csv(
+        output_dir / "instance_taxonomy_summary_self_refine_draft_vs_final.csv",
+        index=False,
+    )
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build per-instance transition taxonomy from canonical runs."
+        description="Generate instance-level taxonomy CSVs from the current run manifest."
     )
     parser.add_argument(
-        "--baseline-strategy",
-        default="single_pass",
-        help="Baseline strategy to compare from.",
+        "--manifest",
+        type=Path,
+        default=DEFAULT_MANIFEST,
+        help="Path to run_manifest.csv",
     )
     parser.add_argument(
-        "--comparison-strategy",
-        default="self_refine",
-        help="Comparison strategy to compare against the baseline.",
+        "--output-dir",
+        type=Path,
+        default=DEFAULT_OUTPUT_DIR,
+        help="Directory to write taxonomy CSVs into",
     )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    manifest = _load_manifest(MANIFEST_PATH)
-    df_examples = _load_canonical_examples(manifest)
-    details, summary = build_pairwise_taxonomy(
-        df_examples=df_examples,
-        manifest=manifest,
-        baseline_strategy=args.baseline_strategy,
-        comparison_strategy=args.comparison_strategy,
-    )
-
-    stem = f"{args.baseline_strategy}_vs_{args.comparison_strategy}"
-    details_path = ANALYSIS_DIR / f"instance_taxonomy_details_{stem}.csv"
-    summary_path = ANALYSIS_DIR / f"instance_taxonomy_summary_{stem}.csv"
-
-    details.to_csv(details_path, index=False)
-    summary.to_csv(summary_path, index=False)
-
-    print(f"Saved details to: {details_path}")
-    print(f"Saved summary to: {summary_path}")
-    print("\nSummary preview:")
-    print(summary.to_string(index=False))
-
-    if args.baseline_strategy == "single_pass" and args.comparison_strategy == "self_refine":
-        best_details, best_summary = build_pairwise_taxonomy(
-            df_examples=df_examples,
-            manifest=manifest,
-            baseline_strategy="single_pass",
-            comparison_strategy="best_of_n",
-        )
-        best_details_path = ANALYSIS_DIR / "instance_taxonomy_details_single_pass_vs_best_of_n.csv"
-        best_summary_path = ANALYSIS_DIR / "instance_taxonomy_summary_single_pass_vs_best_of_n.csv"
-        best_details.to_csv(best_details_path, index=False)
-        best_summary.to_csv(best_summary_path, index=False)
-
-        internal_details, internal_summary = build_self_refine_internal_taxonomy(
-            df_examples=df_examples,
-            manifest=manifest,
-        )
-        internal_details_path = ANALYSIS_DIR / "instance_taxonomy_details_self_refine_draft_vs_final.csv"
-        internal_summary_path = ANALYSIS_DIR / "instance_taxonomy_summary_self_refine_draft_vs_final.csv"
-        internal_details.to_csv(internal_details_path, index=False)
-        internal_summary.to_csv(internal_summary_path, index=False)
-
-        print(f"\nSaved details to: {best_details_path}")
-        print(f"Saved summary to: {best_summary_path}")
-        print(f"Saved details to: {internal_details_path}")
-        print(f"Saved summary to: {internal_summary_path}")
+    write_outputs(args.manifest, args.output_dir)
+    print(f"Wrote taxonomy CSVs to: {args.output_dir}")
 
 
 if __name__ == "__main__":

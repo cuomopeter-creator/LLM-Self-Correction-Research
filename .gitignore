@@ -11,10 +11,6 @@ venv/
 # outputs
 runs/
 logs/
-**/run_*.sh
-
-# large local project/work product
-graph_codegen/
 
 # big model artifacts
 models/weights/

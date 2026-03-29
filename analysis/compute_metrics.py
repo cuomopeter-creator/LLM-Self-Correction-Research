@@ -12,6 +12,7 @@ from analysis.load_results import load_results_jsonl_flat
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNS_DIR = PROJECT_ROOT / "runs"
+DEFAULT_MANIFEST_PATH = PROJECT_ROOT / "analysis" / "run_manifest.csv"
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -223,26 +224,51 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="One or more specific run folder names to process.",
     )
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=None,
+        help="Optional path to a run manifest CSV. If provided, uses its run_dir column.",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Optional explicit output CSV path.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    run_names = args.runs
+
+    if args.manifest is not None:
+        manifest_df = pd.read_csv(args.manifest)
+        if "run_dir" not in manifest_df.columns:
+            raise ValueError(f"Manifest missing required run_dir column: {args.manifest}")
+        run_names = manifest_df["run_dir"].astype(str).dropna().tolist()
 
     df_examples = load_all_examples(
         RUNS_DIR,
         min_results=args.min_results,
-        run_names=args.runs,
+        run_names=run_names,
     )
     df_metrics = compute_metrics_table(df_examples)
 
     out_name = "metrics_summary.csv"
-    if args.runs:
+    if args.output is not None:
+        out_path = args.output
+    elif args.manifest is not None:
+        out_path = PROJECT_ROOT / "analysis" / "master_results.csv"
+    elif args.runs:
         out_name = "metrics_summary_selected_runs.csv"
+        out_path = PROJECT_ROOT / "analysis" / out_name
     elif args.min_results > 1:
         out_name = f"metrics_summary_minresults_{args.min_results}.csv"
-
-    out_path = PROJECT_ROOT / "analysis" / out_name
+        out_path = PROJECT_ROOT / "analysis" / out_name
+    else:
+        out_path = PROJECT_ROOT / "analysis" / out_name
     df_metrics.to_csv(out_path, index=False)
 
     print("\nMetrics summary:")
