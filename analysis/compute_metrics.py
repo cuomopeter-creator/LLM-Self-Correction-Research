@@ -16,6 +16,7 @@ DEFAULT_MANIFEST_PATH = PROJECT_ROOT / "analysis" / "run_manifest.csv"
 
 
 def _read_json(path: Path) -> dict[str, Any]:
+    # Read a JSON file if present, otherwise return an empty metadata mapping.
     if not path.exists():
         return {}
     with path.open("r", encoding="utf-8") as f:
@@ -23,6 +24,7 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _safe_meta_get(meta: dict[str, Any], *keys: str, default=None):
+    # Traverse nested metadata defensively and fall back when a key path is missing.
     cur: Any = meta
     for key in keys:
         if not isinstance(cur, dict) or key not in cur:
@@ -32,6 +34,7 @@ def _safe_meta_get(meta: dict[str, Any], *keys: str, default=None):
 
 
 def _extract_run_metadata(run_dir: Path) -> dict[str, Any]:
+    # Pull the core run identifiers from meta.json while tolerating schema variations.
     meta = _read_json(run_dir / "meta.json")
 
     model = (
@@ -71,6 +74,7 @@ def _extract_run_metadata(run_dir: Path) -> dict[str, Any]:
 
 
 def _count_jsonl_rows(path: Path) -> int:
+    # Count non-empty lines in a JSONL file to measure how many results a run produced.
     count = 0
     with path.open("r", encoding="utf-8") as f:
         for line in f:
@@ -84,6 +88,7 @@ def load_all_examples(
     min_results: int = 1,
     run_names: list[str] | None = None,
 ) -> pd.DataFrame:
+    # Load and annotate example-level results across qualifying run directories.
     runs_dir = Path(runs_dir)
     requested_runs = set(run_names) if run_names else None
 
@@ -152,6 +157,7 @@ def load_all_examples(
 
 
 def compute_metrics_table(df: pd.DataFrame) -> pd.DataFrame:
+    # Aggregate example-level results into per-model, per-strategy, per-task summary metrics.
     work = df.copy()
 
     numeric_cols = [
@@ -209,6 +215,7 @@ def compute_metrics_table(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def parse_args() -> argparse.Namespace:
+    # Parse CLI options for run filtering, manifest input, and output path selection.
     parser = argparse.ArgumentParser(
         description="Compute summary metrics across run results."
     )
@@ -240,6 +247,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    # Resolve the requested run set, compute summary metrics, and save the CSV output.
     args = parse_args()
     run_names = args.runs
 

@@ -27,11 +27,13 @@ ALL_STRATEGIES = ["single_pass", "best_of_n", "self_refine", "oracle"]
 
 
 def load_yaml(path: str) -> dict:
+    # Load a YAML file into a dictionary, defaulting to an empty mapping.
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
 
 def build_model(model_cfg: dict):
+    # Construct the configured model wrapper for the selected provider.
     provider = model_cfg.get("provider")
     if provider == "huggingface":
         return HuggingFaceModel(
@@ -79,6 +81,7 @@ def build_model(model_cfg: dict):
 
 
 def parse_args() -> argparse.Namespace:
+    # Define and parse the command-line interface for the evaluation harness.
     p = argparse.ArgumentParser(description="Run evaluation harness.")
 
     p.add_argument(
@@ -112,6 +115,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def unwrap_generation_result(result: Any) -> Tuple[str, dict]:
+    # Normalize model outputs into plain text plus a usage dictionary.
     if isinstance(result, str):
         return result, {}
 
@@ -124,6 +128,7 @@ def unwrap_generation_result(result: Any) -> Tuple[str, dict]:
 
 
 def sum_usage(outputs: list[Any]) -> dict:
+    # Aggregate token accounting across all collected model outputs.
     total = {
         "input_tokens": 0,
         "output_tokens": 0,
@@ -141,6 +146,7 @@ def sum_usage(outputs: list[Any]) -> dict:
 
 
 def load_examples(task: str, limit: int):
+    # Dispatch to the dataset loader that matches the requested task.
     if task == "gsm8k":
         return load_gsm8k(split="test", limit=limit)
     if task == "truthfulqa":
@@ -153,6 +159,7 @@ def load_examples(task: str, limit: int):
 
 
 def generate_with_model(model, model_cfg: dict, prompt: str):
+    # Call the model with provider-specific output token parameter names.
     provider = model_cfg.get("provider")
     if provider == "openai":
         return model.generate(
@@ -176,12 +183,14 @@ def generate_with_model(model, model_cfg: dict, prompt: str):
 
 
 def resolve_limits(task: str, default_limit: int) -> int:
+    # Apply task-specific limit overrides where the benchmark uses a smaller subset.
     if task == "humaneval":
         return 40
     return default_limit
 
 
 def iter_run_matrix(task_arg: str, strategy_arg: str):
+    # Expand `all` selections into concrete task-strategy pairs and skip unsupported combos.
     tasks = ALL_TASKS if task_arg == "all" else [task_arg]
     strategies = ALL_STRATEGIES if strategy_arg == "all" else [strategy_arg]
 
@@ -194,6 +203,7 @@ def iter_run_matrix(task_arg: str, strategy_arg: str):
 
 
 def run_experiment(*, model_key: str, model_cfg: dict, task: str, strategy: str, limit: int):
+    # Execute one task-strategy run and log each example result to a timestamped directory.
     model = build_model(model_cfg)
     run_id = make_run_id()
     run_dir = f"runs/{run_id}"
@@ -351,6 +361,7 @@ def run_experiment(*, model_key: str, model_cfg: dict, task: str, strategy: str,
 
 
 def main():
+    # Load configuration, resolve the requested run matrix, and launch each experiment.
     args = parse_args()
 
     cfg = load_yaml("configs/models.yaml")

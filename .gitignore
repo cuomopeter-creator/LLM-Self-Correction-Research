@@ -11,6 +11,17 @@ venv/
 # outputs
 runs/
 logs/
+PROJECT_FINISH_CHECKLIST.md
+README_FOR_CODEX.md
+graph_codegen/
+references/
+*.csv
+*.png
+*.html
+*.pdf
+*.jpg
+requirements-lock.no-torch.txt
+requirements-lock.txt
 
 # big model artifacts
 models/weights/

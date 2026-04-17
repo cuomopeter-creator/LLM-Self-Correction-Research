@@ -14,6 +14,7 @@ DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "compute_efficiency.csv"
 
 
 def _latest_manifest_runs(manifest_path: Path) -> pd.DataFrame:
+    # Keep only the most recent run for each model-task-strategy-limit combination.
     manifest = pd.read_csv(manifest_path).copy()
     manifest["run_dir"] = manifest["run_dir"].astype(str)
     manifest["n_examples"] = pd.to_numeric(manifest["n_examples"], errors="coerce")
@@ -27,6 +28,7 @@ def _latest_manifest_runs(manifest_path: Path) -> pd.DataFrame:
 
 
 def _prepare_examples(manifest_path: Path) -> pd.DataFrame:
+    # Load example-level results for the latest manifest runs and normalize token columns.
     latest = _latest_manifest_runs(manifest_path)
     run_names = latest["run_dir"].astype(str).tolist()
     df = load_all_examples(run_names=run_names).copy()
@@ -58,6 +60,7 @@ def _prepare_examples(manifest_path: Path) -> pd.DataFrame:
 
 
 def _summarize_group(group: pd.DataFrame) -> dict[str, float | int]:
+    # Reduce one grouped slice into efficiency-oriented aggregate statistics.
     total_examples = int(group["example_id"].count())
     total_correct = float(group["score_int"].sum())
     total_tokens = float(group["token_usage_for_metrics"].sum())
@@ -78,6 +81,7 @@ def _summarize_group(group: pd.DataFrame) -> dict[str, float | int]:
 
 
 def compute_efficiency_table(df: pd.DataFrame) -> pd.DataFrame:
+    # Build efficiency summaries at both model-task and model-only aggregation levels.
     records: list[dict[str, object]] = []
     group_specs = [
         ("model_task", ["model", "task", "strategy"]),
@@ -104,6 +108,7 @@ def compute_efficiency_table(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def parse_args() -> argparse.Namespace:
+    # Parse CLI arguments for manifest selection and CSV output location.
     parser = argparse.ArgumentParser(
         description="Compute efficiency metrics from the current run manifest."
     )
@@ -123,6 +128,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    # Run the efficiency pipeline end to end and write the resulting CSV.
     args = parse_args()
     df = _prepare_examples(args.manifest)
     out = compute_efficiency_table(df)
