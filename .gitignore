@@ -1,6 +1,7 @@
 # secrets
 .env
 configs/models.yaml
+.codex
 
 # python
 __pycache__/
@@ -22,6 +23,10 @@ references/
 *.jpg
 requirements-lock.no-torch.txt
 requirements-lock.txt
+
+# local dataset caches
+data/**/*.arrow
+data/**/dataset_info.json
 
 # big model artifacts
 models/weights/
